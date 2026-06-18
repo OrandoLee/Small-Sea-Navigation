@@ -510,7 +510,514 @@ export class Lab04App {
     window.addEventListener('message', (event) => {
       const type = event.data?.type
       if (type === 'LAB04_PAUSE') this.paused = true
-      if (type === 'LAB04_RESUM…4791 tokens truncated…find((candidate) => candidate.id === id)
+      if (type === 'LAB04_RESUME') this.paused = false
+      if (type === 'LAB04_RESET') {
+        this.clearBlueprint()
+        this.showStart()
+      }
+    })
+  }
+
+  private seedBlueprint(): void {
+    const seed: Array<[ModuleType, GridPosition]> = [
+      ['buoyancy', { x: -1, y: 0, z: -1 }],
+      ['wood', { x: 0, y: 0, z: -1 }],
+      ['buoyancy', { x: 1, y: 0, z: -1 }],
+      ['wood', { x: -1, y: 0, z: 0 }],
+      ['ballast', { x: 0, y: 0, z: 0 }],
+      ['wood', { x: 1, y: 0, z: 0 }],
+      ['wood', { x: -1, y: 0, z: 1 }],
+      ['wood', { x: 0, y: 0, z: 1 }],
+      ['wood', { x: 1, y: 0, z: 1 }],
+      ['engine', { x: 0, y: 0, z: 2 }],
+      ['rudder', { x: 0, y: 1, z: 2 }],
+    ]
+    seed.forEach(([type, position]) => {
+      const module = this.blueprint.addModule(type, position, 0)
+      if (module) this.addModuleToScene(module)
+    })
+  }
+
+  private enterBuildMode(): void {
+    this.mode = 'build'
+    this.restoreDetachedModules()
+    this.clearProjectiles()
+    this.root.classList.remove('is-guide-open')
+    this.shipBody = null
+    this.lastFrame = null
+    this.pressedKeys.clear()
+    this.startScreen.classList.add('is-hidden')
+    this.root.classList.add('is-running')
+    this.root.classList.remove('is-testing', 'is-reporting')
+    this.gridGroup.visible = true
+    this.waterMesh.visible = false
+    this.mapGroup.visible = false
+    this.wakeSystem.clear()
+    this.hoverCube.visible = true
+    this.setTestingVisuals(false)
+    this.reportPanel.classList.remove('is-visible')
+    this.updateSelectionHelper()
+    this.updateRudderVisuals(1, 0)
+    this.shipGroup.position.set(0, 0, 0)
+    this.shipGroup.rotation.set(0, 0, 0)
+    this.controls.target.set(0, 0.8, 0)
+    this.camera.position.set(5.8, 5.2, 7.5)
+    this.updateAllUi()
+  }
+
+  private showStart(): void {
+    this.mode = 'start'
+    this.restoreDetachedModules()
+    this.clearProjectiles()
+    this.root.classList.remove('is-guide-open')
+    this.startScreen.classList.remove('is-hidden')
+    this.root.classList.remove('is-running', 'is-testing', 'is-reporting')
+    this.setTestingVisuals(false)
+    this.mapGroup.visible = false
+    this.wakeSystem.clear()
+  }
+
+  private launch(): void {
+    const stats = this.blueprint.getStats()
+    if (stats.blocks === 0 || stats.totalBuoyancy <= 0) {
+      this.flashLaunch('请先放置至少一个有浮力的模块')
+      return
+    }
+
+    const structure = this.blueprint.analyzeStructure()
+    if (structure.warnings.length > 0 && Date.now() > this.launchWarningUntil) {
+      this.launchWarningUntil = Date.now() + 3600
+      this.flashLaunch('结构有坍塌风险，再点 Launch 继续', 2600)
+      return
+    }
+
+    const allModules = this.blueprint.getModules()
+    const stableIdSet = new Set(structure.stableModuleIds)
+    const stableModules = allModules.filter((module) => stableIdSet.has(module.id))
+    const simulationModules = stableModules.length > 0 ? stableModules : allModules
+    const simulationStats = this.blueprint.getStats(simulationModules)
+
+    this.mode = 'test'
+    this.root.classList.add('is-testing')
+    this.root.classList.remove('is-reporting')
+    this.gridGroup.visible = false
+    this.waterMesh.visible = true
+    this.mapGroup.visible = true
+    this.hoverCube.visible = false
+    this.setTestingVisuals(true)
+    this.reportPanel.classList.remove('is-visible')
+    this.shipBody = new ShipRigidBody(simulationStats, simulationModules, structure.unstableModuleIds.length)
+    this.clearProjectiles()
+    this.updateSelectionHelper(false)
+    this.shipBody.reset()
+    this.shipBody.position.copy(this.seaMap.start).setY(this.shipBody.position.y)
+    this.shipBody.rotation.y = 0
+    this.shipGroup.position.copy(this.shipBody.position)
+    this.shipGroup.rotation.copy(this.shipBody.rotation)
+    this.prepareDetachedModules(structure)
+    this.controls.target.copy(this.shipBody.position).add(new THREE.Vector3(0, 0.8, 0))
+    this.camera.position.copy(this.shipBody.position).add(new THREE.Vector3(8.5, 6.2, 12.5))
+    this.voyageRecorder.start()
+    this.voyageRecord = null
+    this.voyageCompleted = false
+    this.navigationStatus = 'Sailing / 航行中'
+    this.shallowTime = 0
+    this.reefCooldown = 0
+    this.groundedActive = false
+    this.wakeSystem.clear()
+    this.wakeSystem.splash(this.shipBody.position)
+    this.rootEl.focus()
+    this.updateAllUi()
+  }
+
+  private resetTest(): void {
+    if (this.mode !== 'test' && this.mode !== 'report') return
+    this.mode = 'test'
+    this.root.classList.remove('is-reporting')
+    this.reportPanel.classList.remove('is-visible')
+    this.pressedKeys.clear()
+    this.restoreDetachedModules()
+    this.clearProjectiles()
+    const structure = this.blueprint.analyzeStructure()
+    const allModules = this.blueprint.getModules()
+    const stableIdSet = new Set(structure.stableModuleIds)
+    const stableModules = allModules.filter((module) => stableIdSet.has(module.id))
+    const simulationModules = stableModules.length > 0 ? stableModules : allModules
+    this.shipBody = new ShipRigidBody(this.blueprint.getStats(simulationModules), simulationModules, structure.unstableModuleIds.length)
+    this.shipBody.reset()
+    this.shipBody.position.copy(this.seaMap.start).setY(this.shipBody.position.y)
+    this.shipGroup.position.copy(this.shipBody.position)
+    this.shipGroup.rotation.copy(this.shipBody.rotation)
+    this.prepareDetachedModules(structure)
+    this.setTestingVisuals(true)
+    this.updateRudderVisuals(1, 0)
+    this.lastFrame = null
+    this.voyageRecorder.start()
+    this.voyageRecord = null
+    this.voyageCompleted = false
+    this.navigationStatus = 'Sailing / 航行中'
+    this.shallowTime = 0
+    this.reefCooldown = 0
+    this.groundedActive = false
+    this.wakeSystem.clear()
+    this.wakeSystem.splash(this.shipBody.position)
+  }
+
+  private showReport(completed = this.voyageCompleted): void {
+    this.mode = 'report'
+    this.root.classList.add('is-reporting')
+    this.reportPanel.classList.add('is-visible')
+    const stats = this.blueprint.getStats()
+    const record = this.voyageRecord ?? this.voyageRecorder.stop(completed)
+    this.voyageRecord = record
+    const report = this.voyageReportGenerator.generate(record, stats)
+    this.reportPanel.innerHTML = `
+      <div class="panel-heading">
+        <p>航行报告 / LAB 04</p>
+        <h3>${report.result}</h3>
+      </div>
+      <div class="report-grid">
+        <div><span>总用时</span><strong>${record.elapsed.toFixed(1)}s</strong></div>
+        <div><span>最大速度</span><strong>${record.maxSpeed.toFixed(1)}</strong></div>
+        <div><span>平均速度</span><strong>${record.averageSpeed.toFixed(1)}</strong></div>
+        <div><span>抵达距离</span><strong>${record.finalDistance.toFixed(0)}m</strong></div>
+        <div><span>碰撞次数</span><strong>${record.collisions}</strong></div>
+        <div><span>搁浅次数</span><strong>${record.groundings}</strong></div>
+        <div><span>最大横倾</span><strong>${record.maxRoll.toFixed(1)}°</strong></div>
+        <div><span>稳定评分</span><strong>${analyzeStats(stats).score}</strong></div>
+      </div>
+      <h4>航行评价</h4>
+      <p class="report-evaluation">${report.evaluation}</p>
+      <h4>问题分析</h4>
+      <ul>${report.issues.map((issue) => `<li>${issue}</li>`).join('')}</ul>
+      <h4>改造建议</h4>
+      <ul>${report.suggestions.map((suggestion) => `<li>${suggestion}</li>`).join('')}</ul>
+      <div class="report-actions">
+        <button data-action="back-dock">返回船坞</button>
+        <button data-action="reset-test">重新出航</button>
+      </div>
+    `
+  }
+
+  private clearBlueprint(): void {
+    this.restoreDetachedModules()
+    this.clearProjectiles()
+    this.launchWarningUntil = 0
+    this.blueprint.clear()
+    this.moduleMeshes.forEach((mesh) => this.shipGroup.remove(mesh))
+    this.moduleMeshes.clear()
+    this.clearSelection()
+    this.updateAllUi()
+  }
+
+  private onPointerMove = (event: PointerEvent): void => {
+    if (this.mode !== 'build') return
+
+    if (this.pointerDownState?.pointerId === event.pointerId) {
+      const moved = Math.hypot(event.clientX - this.pointerDownState.startX, event.clientY - this.pointerDownState.startY)
+      if (moved > DRAG_THRESHOLD_PX) this.pointerDownState.dragged = true
+    }
+
+    this.updatePointer(event)
+    if (this.pointerDownState?.dragged) {
+      this.hoveredCell = null
+      this.hoverCube.visible = false
+      return
+    }
+
+    const target = this.getPointerTarget()
+    this.hoveredCell = target?.gridPosition ?? null
+    this.hoverCube.visible = Boolean(target)
+    if (target) {
+      this.hoverCube.position.set(target.gridPosition.x, target.gridPosition.y + 0.5, target.gridPosition.z)
+      this.setHoverStyle(target.occupied)
+    }
+  }
+
+  private onPointerDown = (event: PointerEvent): void => {
+    if (this.mode !== 'build') return
+    this.active = true
+    this.activation.classList.add('is-hidden')
+    this.rootEl.focus()
+
+    if (event.button !== 0 && event.button !== 2) return
+    this.pointerDownState = {
+      pointerId: event.pointerId,
+      button: event.button,
+      startX: event.clientX,
+      startY: event.clientY,
+      dragged: false,
+    }
+  }
+
+  private onPointerUp = (event: PointerEvent): void => {
+    if (this.mode !== 'build' || this.pointerDownState?.pointerId !== event.pointerId) return
+
+    const pointerState = this.pointerDownState
+    this.pointerDownState = null
+
+    const moved = Math.hypot(event.clientX - pointerState.startX, event.clientY - pointerState.startY)
+    if (pointerState.dragged || moved > DRAG_THRESHOLD_PX) {
+      this.updatePointer(event)
+      const target = this.getPointerTarget()
+      this.hoveredCell = target?.gridPosition ?? null
+      this.hoverCube.visible = Boolean(target)
+      if (target) {
+        this.hoverCube.position.set(target.gridPosition.x, target.gridPosition.y + 0.5, target.gridPosition.z)
+        this.setHoverStyle(target.occupied)
+      }
+      return
+    }
+
+    this.updatePointer(event)
+    this.raycaster.setFromCamera(this.pointer, this.camera)
+    const directModuleHit = this.intersectModule()
+    if (pointerState.button === 0 && directModuleHit && this.blueprint.getAt(directModuleHit.gridPosition)?.type === 'rudder') {
+      this.selectModule({ id: directModuleHit.id, gridPosition: directModuleHit.gridPosition, occupied: true })
+      return
+    }
+
+    const target = this.getPointerTarget(pointerState.button === 2)
+    if (!target) return
+
+    if (pointerState.button === 2) {
+      this.removeAt(target.gridPosition)
+      return
+    }
+
+    if (target.occupied) {
+      this.selectModule(target)
+      return
+    }
+
+    const module = this.blueprint.addModule(this.selectedType, target.gridPosition, this.currentRotation)
+    if (!module) return
+    this.addModuleToScene(module)
+    this.selectModule({ id: module.id, gridPosition: module.gridPosition, occupied: true })
+    this.updateAllUi()
+  }
+
+  private onPointerCancel = (event: PointerEvent): void => {
+    if (this.pointerDownState?.pointerId === event.pointerId) this.pointerDownState = null
+  }
+
+  private onKeyDown = (event: KeyboardEvent): void => {
+    const key = event.key.toLowerCase()
+    if (this.isShipControlKey(key)) {
+      this.pressedKeys.add(key)
+      if (this.mode === 'test') event.preventDefault()
+    }
+    if (key === 'f' && this.mode === 'test') {
+      event.preventDefault()
+      if (!event.repeat && this.active) this.fireCannons()
+    }
+
+    if (event.key === 'Escape') {
+      this.active = false
+      this.activation.classList.remove('is-hidden')
+    }
+    if (!this.active) return
+    if (key === 'c') this.clearBlueprint()
+    if (key === 'r') {
+      if (this.mode === 'test') {
+        this.resetNavigationView()
+        return
+      }
+      if (this.rotateSelectedModule()) return
+      this.currentRotation = this.nextQuarterTurn(this.currentRotation)
+    }
+    if (event.key === 'Delete') {
+      if (this.selectedCell) {
+        this.removeAt(this.selectedCell)
+        return
+      }
+      if (this.hoveredCell) this.removeAt(this.hoveredCell)
+    }
+  }
+
+  private onKeyUp = (event: KeyboardEvent): void => {
+    this.pressedKeys.delete(event.key.toLowerCase())
+  }
+
+  private updatePointer(event: PointerEvent): void {
+    const rect = this.renderer.domElement.getBoundingClientRect()
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  }
+
+  private getPointerTarget(preferOccupied = false): PointerTarget | null {
+    this.raycaster.setFromCamera(this.pointer, this.camera)
+
+    const moduleHit = this.intersectModule()
+    if (moduleHit) {
+      const adjacentCell = this.adjacentCellFromHit(moduleHit)
+      if (!preferOccupied && adjacentCell && !this.blueprint.getAt(adjacentCell)) {
+        return { id: '', gridPosition: adjacentCell, occupied: false }
+      }
+      return { ...moduleHit, occupied: true }
+    }
+
+    const cell = this.intersectGridCell(preferOccupied)
+    if (!cell) return null
+
+    const module = this.blueprint.getAt(cell)
+    return {
+      id: module?.id ?? '',
+      gridPosition: cell,
+      occupied: Boolean(module),
+    }
+  }
+
+  private intersectGridCell(preferOccupied = false): GridPosition | null {
+    const point = new THREE.Vector3()
+    if (!this.raycaster.ray.intersectPlane(this.buildPlane, point)) return null
+
+    const x = Math.round(point.x)
+    const z = Math.round(point.z)
+    if (x < this.minBuildX() || x > this.maxBuildX() || z < this.minBuildZ() || z > this.maxBuildZ()) return null
+
+    return preferOccupied ? this.topOccupiedCell(x, z) : this.nextFreeCell(x, z)
+  }
+
+  private intersectModule(): ModuleHit | null {
+    const intersections = this.raycaster.intersectObjects([...this.moduleMeshes.values()], true)
+    for (const intersection of intersections) {
+      if (!(intersection.object instanceof THREE.Mesh)) continue
+      if (intersection.object.userData.cannonDirectionMarker) continue
+      const moduleHit = this.moduleHitFromObject(intersection.object)
+      if (moduleHit) return { ...moduleHit, normal: this.worldNormal(intersection) }
+    }
+    return null
+  }
+
+  private moduleHitFromObject(object: THREE.Object3D): Omit<ModuleHit, 'normal'> | null {
+    let current: THREE.Object3D | null = object
+    while (current) {
+      const position = current.userData.gridPosition as GridPosition | undefined
+      const id = current.userData.moduleId as string | undefined
+      if (position && id) return { id, gridPosition: { ...position } }
+      current = current.parent
+    }
+    return null
+  }
+
+  private worldNormal(intersection: THREE.Intersection): THREE.Vector3 {
+    if (!intersection.face) return new THREE.Vector3()
+    return intersection.face.normal
+      .clone()
+      .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(intersection.object.matrixWorld))
+      .normalize()
+  }
+
+  private adjacentCellFromHit(hit: ModuleHit): GridPosition | null {
+    const { normal, gridPosition } = hit
+    const cell = { ...gridPosition }
+    if (normal.y > 0.55) cell.y += 1
+    else if (normal.y < -0.55) cell.y -= 1
+    else if (Math.abs(normal.x) >= Math.abs(normal.z)) cell.x += Math.sign(normal.x)
+    else cell.z += Math.sign(normal.z)
+
+    if (!this.isWithinBuildArea(cell)) return null
+    return cell
+  }
+
+  private nextFreeCell(x: number, z: number): GridPosition | null {
+    let y = 0
+    for (let candidate = this.buildArea.height - 1; candidate >= 0; candidate -= 1) {
+      if (this.blueprint.getAt({ x, y: candidate, z })) {
+        y = Math.min(this.buildArea.height - 1, candidate + 1)
+        break
+      }
+    }
+    if (y >= this.buildArea.height) return null
+    return { x, y, z }
+  }
+
+  private topOccupiedCell(x: number, z: number): GridPosition | null {
+    for (let y = this.buildArea.height - 1; y >= 0; y -= 1) {
+      if (this.blueprint.getAt({ x, y, z })) return { x, y, z }
+    }
+    return null
+  }
+
+  private isWithinBuildArea(cell: GridPosition): boolean {
+    return (
+      cell.x >= this.minBuildX()
+      && cell.x <= this.maxBuildX()
+      && cell.z >= this.minBuildZ()
+      && cell.z <= this.maxBuildZ()
+      && cell.y >= 0
+      && cell.y < this.buildArea.height
+    )
+  }
+
+  private addModuleToScene(module: PlacedModule): void {
+    this.launchWarningUntil = 0
+    const mesh = createModuleMesh(module)
+    mesh.position.set(module.gridPosition.x, module.gridPosition.y + 0.5, module.gridPosition.z)
+    mesh.traverse((object) => {
+      object.userData.moduleId = module.id
+      object.userData.gridPosition = { ...module.gridPosition }
+    })
+    this.shipGroup.add(mesh)
+    this.moduleMeshes.set(module.id, mesh)
+  }
+
+  private removeAt(position: GridPosition): void {
+    this.launchWarningUntil = 0
+    const removed = this.blueprint.removeModule(position)
+    if (!removed) return
+    const mesh = this.moduleMeshes.get(removed.id)
+    if (mesh) this.shipGroup.remove(mesh)
+    this.moduleMeshes.delete(removed.id)
+    if (this.selectedModuleId === removed.id) this.clearSelection()
+    this.updateAllUi()
+  }
+
+  private prepareDetachedModules(structure: StructuralAnalysis): void {
+    this.restoreDetachedModules()
+    if (structure.unstableModuleIds.length === 0) return
+
+    const unstableIds = new Set(structure.unstableModuleIds)
+    const center = this.blueprint.getStats().centerOfMass
+    this.shipGroup.updateMatrixWorld(true)
+
+    this.moduleMeshes.forEach((mesh, id) => {
+      if (!unstableIds.has(id)) return
+
+      const worldPosition = new THREE.Vector3()
+      const worldQuaternion = new THREE.Quaternion()
+      mesh.getWorldPosition(worldPosition)
+      mesh.getWorldQuaternion(worldQuaternion)
+      this.shipGroup.remove(mesh)
+      this.scene.add(mesh)
+      mesh.position.copy(worldPosition)
+      mesh.quaternion.copy(worldQuaternion)
+
+      const module = this.blueprint.getModules().find((candidate) => candidate.id === id)
+      const xPush = (module?.gridPosition.x ?? 0) - center.x
+      const zPush = (module?.gridPosition.z ?? 0) - center.z
+      const outward = new THREE.Vector3(xPush, 0, zPush)
+      if (outward.lengthSq() < 0.01) outward.set(Math.random() - 0.5, 0, Math.random() - 0.5)
+      outward.normalize()
+
+      this.detachedVisuals.set(id, {
+        mesh,
+        velocity: outward.multiplyScalar(0.65).add(new THREE.Vector3(0, -0.18, 0)),
+        angularVelocity: new THREE.Vector3(
+          THREE.MathUtils.randFloatSpread(1.8),
+          THREE.MathUtils.randFloatSpread(1.2),
+          THREE.MathUtils.randFloatSpread(1.8),
+        ),
+      })
+    })
+  }
+
+  private restoreDetachedModules(): void {
+    if (this.detachedVisuals.size === 0) return
+
+    this.detachedVisuals.forEach(({ mesh }, id) => {
+      const module = this.blueprint.getModules().find((candidate) => candidate.id === id)
       if (!module) {
         this.scene.remove(mesh)
         return
@@ -1006,4 +1513,3 @@ export class Lab04App {
     return key === 'w' || key === 'a' || key === 's' || key === 'd'
   }
 }
-
