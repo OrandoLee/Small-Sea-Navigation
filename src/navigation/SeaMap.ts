@@ -1,0 +1,150 @@
+import * as THREE from 'three'
+
+export type ReefCollision = {
+  normal: THREE.Vector3
+  penetration: number
+}
+
+type Reef = { position: THREE.Vector3; radius: number }
+
+export class SeaMap {
+  readonly start = new THREE.Vector3(0, 0, 12)
+  readonly islandGoal = new THREE.Vector3(0, 0, -148)
+  readonly reefs: Reef[] = [
+    { position: new THREE.Vector3(-14, 0, -35), radius: 4.4 },
+    { position: new THREE.Vector3(12, 0, -53), radius: 3.8 },
+    { position: new THREE.Vector3(-9, 0, -78), radius: 5.2 },
+    { position: new THREE.Vector3(17, 0, -105), radius: 4.6 },
+    { position: new THREE.Vector3(-18, 0, -119), radius: 3.6 },
+  ]
+
+  createVisuals(): THREE.Group {
+    const world = new THREE.Group()
+    world.name = 'small-sea-map'
+    this.addHarbor(world)
+    this.addIsland(world)
+    this.addShoals(world)
+    this.addReefs(world)
+    this.addBuoys(world)
+    return world
+  }
+
+  getDepthAt(x: number, z: number): number {
+    const shoalA = Math.hypot(x - 18, z + 66)
+    const shoalB = Math.hypot(x + 20, z + 103)
+    if (shoalA < 16) return 0.72 + shoalA * 0.035
+    if (shoalB < 13) return 0.82 + shoalB * 0.04
+    return 5.4
+  }
+
+  isInShallowWater(position: THREE.Vector3): boolean {
+    return this.getDepthAt(position.x, position.z) < 1.35
+  }
+
+  checkReefCollision(position: THREE.Vector3, shipRadius = 1.7): ReefCollision | null {
+    for (const reef of this.reefs) {
+      const dx = position.x - reef.position.x
+      const dz = position.z - reef.position.z
+      const distance = Math.hypot(dx, dz)
+      const limit = reef.radius + shipRadius
+      if (distance >= limit) continue
+      const normal = new THREE.Vector3(dx || 0.01, 0, dz).normalize()
+      return { normal, penetration: limit - distance }
+    }
+    return null
+  }
+
+  getDistanceToIsland(position: THREE.Vector3): number {
+    return Math.hypot(position.x - this.islandGoal.x, position.z - this.islandGoal.z)
+  }
+
+  private addHarbor(world: THREE.Group): void {
+    const concrete = new THREE.MeshStandardMaterial({ color: '#222b30', roughness: 0.86 })
+    const wood = new THREE.MeshStandardMaterial({ color: '#715139', roughness: 0.82 })
+    const quay = new THREE.Mesh(new THREE.BoxGeometry(26, 2.2, 14), concrete)
+    quay.position.set(0, -0.8, 25)
+    world.add(quay)
+    ;[-7, 7].forEach((x) => {
+      const pier = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.45, 18), wood)
+      pier.position.set(x, 0.18, 12)
+      world.add(pier)
+    })
+    ;[-10, 10].forEach((x) => {
+      const lamp = new THREE.PointLight('#7bdcff', 9, 28, 2)
+      lamp.position.set(x, 3, 18)
+      world.add(lamp)
+    })
+  }
+
+  private addIsland(world: THREE.Group): void {
+    const sand = new THREE.MeshStandardMaterial({ color: '#b7a77b', roughness: 0.96 })
+    const rock = new THREE.MeshStandardMaterial({ color: '#37433d', roughness: 0.98 })
+    const beach = new THREE.Mesh(new THREE.CylinderGeometry(18, 24, 2.2, 22), sand)
+    beach.position.copy(this.islandGoal).add(new THREE.Vector3(0, -0.8, -4))
+    world.add(beach)
+    const hill = new THREE.Mesh(new THREE.ConeGeometry(15, 15, 18), rock)
+    hill.position.copy(this.islandGoal).add(new THREE.Vector3(3, 6, -8))
+    world.add(hill)
+    const lighthouse = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.4, 2.2, 12, 12),
+      new THREE.MeshStandardMaterial({ color: '#d9ddd8', roughness: 0.65 }),
+    )
+    lighthouse.position.copy(this.islandGoal).add(new THREE.Vector3(-5, 5.6, 0))
+    world.add(lighthouse)
+    const beacon = new THREE.PointLight('#77e8ff', 28, 55, 1.7)
+    beacon.position.copy(this.islandGoal).add(new THREE.Vector3(-5, 12.2, 0))
+    world.add(beacon)
+    const goal = new THREE.Mesh(
+      new THREE.TorusGeometry(7, 0.22, 10, 48),
+      new THREE.MeshBasicMaterial({ color: '#74e2ff', transparent: true, opacity: 0.72 }),
+    )
+    goal.rotation.x = Math.PI / 2
+    goal.position.copy(this.islandGoal).add(new THREE.Vector3(0, 0.25, 8))
+    goal.name = 'island-goal-ring'
+    world.add(goal)
+  }
+
+  private addShoals(world: THREE.Group): void {
+    const mat = new THREE.MeshBasicMaterial({ color: '#66d7cb', transparent: true, opacity: 0.16, depthWrite: false })
+    ;[
+      [18, -66, 32],
+      [-20, -103, 26],
+    ].forEach(([x, z, size]) => {
+      const shoal = new THREE.Mesh(new THREE.CircleGeometry(size / 2, 40), mat)
+      shoal.rotation.x = -Math.PI / 2
+      shoal.position.set(x, 0.05, z)
+      world.add(shoal)
+    })
+  }
+
+  private addReefs(world: THREE.Group): void {
+    const mat = new THREE.MeshStandardMaterial({ color: '#292e2d', roughness: 1 })
+    this.reefs.forEach((reef, index) => {
+      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(reef.radius, 0), mat)
+      rock.scale.set(1, 0.75 + (index % 2) * 0.22, 0.8)
+      rock.position.copy(reef.position).setY(1.25)
+      rock.rotation.set(index * 0.3, index * 0.6, index * 0.17)
+      world.add(rock)
+    })
+  }
+
+  private addBuoys(world: THREE.Group): void {
+    const red = new THREE.MeshStandardMaterial({ color: '#ff6a56', emissive: '#63150f', emissiveIntensity: 0.35 })
+    const green = new THREE.MeshStandardMaterial({ color: '#65e6bb', emissive: '#0a5b48', emissiveIntensity: 0.35 })
+    for (let i = 0; i < 8; i += 1) {
+      const z = -8 - i * 17
+      ;[-7, 7].forEach((x, side) => {
+        const buoy = new THREE.Group()
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.6, 1.7, 10), side === 0 ? red : green)
+        body.position.y = 0.65
+        buoy.add(body)
+        const light = new THREE.PointLight(side === 0 ? '#ff6a56' : '#65e6bb', 2.4, 9)
+        light.position.y = 1.75
+        buoy.add(light)
+        buoy.position.set(x + Math.sin(i * 1.7) * 4.5, 0, z)
+        world.add(buoy)
+      })
+    }
+  }
+}
+
