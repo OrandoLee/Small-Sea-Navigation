@@ -7,19 +7,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  build-and-publish:
     runs-on: ubuntu-latest
 
     steps:
@@ -38,17 +33,11 @@ jobs:
       - name: 构建项目
         run: npm run build
 
-      - name: 配置并启用 Pages
-        uses: actions/configure-pages@v5
+      - name: 发布 gh-pages 分支
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          enablement: true
-
-      - name: 上传 Pages 构建产物
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: ./dist
-
-      - name: 发布到 Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./dist
+          force_orphan: true
 
