@@ -1,15 +1,33 @@
 import * as THREE from 'three'
 
-export type ReefCollision = {
+export type MapCollision = {
   normal: THREE.Vector3
   penetration: number
+  label: string
+  restitution: number
 }
 
 type Reef = { position: THREE.Vector3; radius: number }
+type CircleCollider = {
+  shape: 'circle'
+  center: THREE.Vector2
+  radius: number
+  label: string
+  restitution: number
+  dockingCutout?: boolean
+}
+type BoxCollider = {
+  shape: 'box'
+  center: THREE.Vector2
+  halfSize: THREE.Vector2
+  label: string
+  restitution: number
+}
+type MapCollider = CircleCollider | BoxCollider
 
 export class SeaMap {
   readonly start = new THREE.Vector3(0, 0, 12)
-  readonly islandGoal = new THREE.Vector3(0, 0, -148)
+  readonly islandGoal = new THREE.Vector3(0, 0, -140)
   readonly reefs: Reef[] = [
     { position: new THREE.Vector3(-14, 0, -35), radius: 4.4 },
     { position: new THREE.Vector3(12, 0, -53), radius: 3.8 },
@@ -17,6 +35,32 @@ export class SeaMap {
     { position: new THREE.Vector3(17, 0, -105), radius: 4.6 },
     { position: new THREE.Vector3(-18, 0, -119), radius: 3.6 },
   ]
+  private readonly colliders: MapCollider[]
+
+  constructor() {
+    this.colliders = [
+      this.boxCollider(0, 25, 13, 7, '港口防波堤', 0.08),
+      this.boxCollider(-7, 12, 1.7, 9, '左侧栈桥', 0.12),
+      this.boxCollider(7, 12, 1.7, 9, '右侧栈桥', 0.12),
+      this.circleCollider(0, -152, 21.5, '目标岛屿', 0.08, true),
+      this.circleCollider(3, -160, 13, '岛屿山体', 0.06, true),
+      this.circleCollider(-5, -152, 2.2, '灯塔', 0.1),
+      ...this.reefs.map((reef, index) => this.circleCollider(
+        reef.position.x,
+        reef.position.z,
+        reef.radius * 0.92,
+        `礁石 ${index + 1}`,
+        0.34,
+      )),
+      ...this.getBuoyPositions().map((position, index) => this.circleCollider(
+        position.x,
+        position.y,
+        0.72,
+        `航道浮标 ${index + 1}`,
+        0.48,
+      )),
+    ]
+  }
 
   createVisuals(): THREE.Group {
     const world = new THREE.Group()
@@ -41,17 +85,64 @@ export class SeaMap {
     return this.getDepthAt(position.x, position.z) < 1.35
   }
 
-  checkReefCollision(position: THREE.Vector3, shipRadius = 1.7): ReefCollision | null {
-    for (const reef of this.reefs) {
-      const dx = position.x - reef.position.x
-      const dz = position.z - reef.position.z
-      const distance = Math.hypot(dx, dz)
-      const limit = reef.radius + shipRadius
-      if (distance >= limit) continue
-      const normal = new THREE.Vector3(dx || 0.01, 0, dz).normalize()
-      return { normal, penetration: limit - distance }
+  checkCollision(position: THREE.Vector3, shipRadius = 1.7): MapCollision | null {
+    for (const collider of this.colliders) {
+      if (collider.shape === 'circle') {
+        if (collider.dockingCutout && this.isInsideDockingChannel(position)) continue
+        const dx = position.x - collider.center.x
+        const dz = position.z - collider.center.y
+        const distance = Math.hypot(dx, dz)
+        const limit = collider.radius + shipRadius
+        if (distance >= limit) continue
+        const normal = new THREE.Vector3(dx || 0.01, 0, dz).normalize()
+        return {
+          normal,
+          penetration: limit - distance,
+          label: collider.label,
+          restitution: collider.restitution,
+        }
+      }
+
+      const minX = collider.center.x - collider.halfSize.x
+      const maxX = collider.center.x + collider.halfSize.x
+      const minZ = collider.center.y - collider.halfSize.y
+      const maxZ = collider.center.y + collider.halfSize.y
+      const closestX = THREE.MathUtils.clamp(position.x, minX, maxX)
+      const closestZ = THREE.MathUtils.clamp(position.z, minZ, maxZ)
+      let dx = position.x - closestX
+      let dz = position.z - closestZ
+      let distance = Math.hypot(dx, dz)
+      if (distance >= shipRadius) continue
+
+      if (distance < 0.0001) {
+        const distances = [
+          { value: Math.abs(position.x - minX), normal: new THREE.Vector3(-1, 0, 0) },
+          { value: Math.abs(maxX - position.x), normal: new THREE.Vector3(1, 0, 0) },
+          { value: Math.abs(position.z - minZ), normal: new THREE.Vector3(0, 0, -1) },
+          { value: Math.abs(maxZ - position.z), normal: new THREE.Vector3(0, 0, 1) },
+        ].sort((a, b) => a.value - b.value)
+        return {
+          normal: distances[0].normal,
+          penetration: shipRadius + distances[0].value,
+          label: collider.label,
+          restitution: collider.restitution,
+        }
+      }
+
+      dx /= distance
+      dz /= distance
+      return {
+        normal: new THREE.Vector3(dx, 0, dz),
+        penetration: shipRadius - distance,
+        label: collider.label,
+        restitution: collider.restitution,
+      }
     }
     return null
+  }
+
+  checkReefCollision(position: THREE.Vector3, shipRadius = 1.7): MapCollision | null {
+    return this.checkCollision(position, shipRadius)
   }
 
   getDistanceToIsland(position: THREE.Vector3): number {
@@ -99,7 +190,7 @@ export class SeaMap {
       new THREE.MeshBasicMaterial({ color: '#74e2ff', transparent: true, opacity: 0.72 }),
     )
     goal.rotation.x = Math.PI / 2
-    goal.position.copy(this.islandGoal).add(new THREE.Vector3(0, 0.25, 8))
+    goal.position.copy(this.islandGoal).setY(0.25)
     goal.name = 'island-goal-ring'
     world.add(goal)
   }
@@ -131,9 +222,8 @@ export class SeaMap {
   private addBuoys(world: THREE.Group): void {
     const red = new THREE.MeshStandardMaterial({ color: '#ff6a56', emissive: '#63150f', emissiveIntensity: 0.35 })
     const green = new THREE.MeshStandardMaterial({ color: '#65e6bb', emissive: '#0a5b48', emissiveIntensity: 0.35 })
-    for (let i = 0; i < 8; i += 1) {
-      const z = -8 - i * 17
-      ;[-7, 7].forEach((x, side) => {
+    this.getBuoyPositions().forEach((position, index) => {
+      const side = index % 2
         const buoy = new THREE.Group()
         const body = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.6, 1.7, 10), side === 0 ? red : green)
         body.position.y = 0.65
@@ -141,10 +231,46 @@ export class SeaMap {
         const light = new THREE.PointLight(side === 0 ? '#ff6a56' : '#65e6bb', 2.4, 9)
         light.position.y = 1.75
         buoy.add(light)
-        buoy.position.set(x + Math.sin(i * 1.7) * 4.5, 0, z)
+        buoy.position.set(position.x, 0, position.y)
         world.add(buoy)
+    })
+  }
+
+  private getBuoyPositions(): THREE.Vector2[] {
+    const positions: THREE.Vector2[] = []
+    for (let i = 0; i < 8; i += 1) {
+      const z = -8 - i * 17
+      ;[-7, 7].forEach((x) => {
+        positions.push(new THREE.Vector2(x + Math.sin(i * 1.7) * 4.5, z))
       })
     }
+    return positions
+  }
+
+  private isInsideDockingChannel(position: THREE.Vector3): boolean {
+    return Math.abs(position.x) < 7.5 && position.z > -153
+  }
+
+  private circleCollider(
+    x: number,
+    z: number,
+    radius: number,
+    label: string,
+    restitution: number,
+    dockingCutout = false,
+  ): CircleCollider {
+    return { shape: 'circle', center: new THREE.Vector2(x, z), radius, label, restitution, dockingCutout }
+  }
+
+  private boxCollider(
+    x: number,
+    z: number,
+    halfWidth: number,
+    halfLength: number,
+    label: string,
+    restitution: number,
+  ): BoxCollider {
+    return { shape: 'box', center: new THREE.Vector2(x, z), halfSize: new THREE.Vector2(halfWidth, halfLength), label, restitution }
   }
 }
 

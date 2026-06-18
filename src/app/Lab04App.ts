@@ -1415,12 +1415,19 @@ export class Lab04App {
     }
 
     this.reefCooldown = Math.max(0, this.reefCooldown - delta)
-    const collision = this.seaMap.checkReefCollision(this.shipBody.position)
+    const collision = this.seaMap.checkCollision(this.shipBody.position, this.shipBody.getCollisionRadius())
     if (collision) {
       this.shipBody.position.addScaledVector(collision.normal, collision.penetration + 0.12)
-      this.shipBody.horizontalVelocity.reflect(collision.normal).multiplyScalar(0.28)
+      const impactSpeed = -this.shipBody.horizontalVelocity.dot(collision.normal)
+      if (impactSpeed > 0) {
+        this.shipBody.horizontalVelocity.addScaledVector(
+          collision.normal,
+          impactSpeed * (1 + collision.restitution),
+        )
+      }
+      this.shipBody.horizontalVelocity.multiplyScalar(0.42)
       this.shipBody.angularVelocity += (Math.random() - 0.5) * 0.8
-      this.navigationStatus = 'Hull Impact / 船体撞击'
+      this.navigationStatus = `${collision.label} / 船体撞击`
       if (this.reefCooldown <= 0) {
         this.voyageRecorder.markCollision()
         this.reefCooldown = 1.2

@@ -172,6 +172,14 @@ export class ShipRigidBody {
     })
   }
 
+  getCollisionRadius(): number {
+    return this.modules.reduce((radius, module) => {
+      const x = module.gridPosition.x - this.stats.centerOfMass.x
+      const z = module.gridPosition.z - this.stats.centerOfMass.z
+      return Math.max(radius, Math.hypot(x, z) + 0.72)
+    }, 1.15)
+  }
+
   private getStatus(): string {
     if (this.sunk) return '下沉'
     if (this.capsized) return '翻覆风险'
