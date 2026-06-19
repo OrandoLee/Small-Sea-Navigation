@@ -14,7 +14,6 @@ type CircleCollider = {
   radius: number
   label: string
   restitution: number
-  dockingCutout?: boolean
 }
 type BoxCollider = {
   shape: 'box'
@@ -27,7 +26,9 @@ type MapCollider = CircleCollider | BoxCollider
 
 export class SeaMap {
   readonly start = new THREE.Vector3(0, 0, 12)
-  readonly islandGoal = new THREE.Vector3(0, 0, -140)
+  readonly islandGoal = new THREE.Vector3(0, 0, -118)
+  private readonly islandCenter = new THREE.Vector3(0, 0, -144)
+  private readonly islandCollisionRadius = 19.5
   readonly reefs: Reef[] = [
     { position: new THREE.Vector3(-14, 0, -35), radius: 4.4 },
     { position: new THREE.Vector3(12, 0, -53), radius: 3.8 },
@@ -42,9 +43,13 @@ export class SeaMap {
       this.boxCollider(0, 25, 13, 7, '港口防波堤', 0.08),
       this.boxCollider(-7, 12, 1.7, 9, '左侧栈桥', 0.12),
       this.boxCollider(7, 12, 1.7, 9, '右侧栈桥', 0.12),
-      this.circleCollider(0, -152, 21.5, '目标岛屿', 0.08, true),
-      this.circleCollider(3, -160, 13, '岛屿山体', 0.06, true),
-      this.circleCollider(-5, -152, 2.2, '灯塔', 0.1),
+      this.circleCollider(
+        this.islandCenter.x,
+        this.islandCenter.z,
+        this.islandCollisionRadius,
+        '目标岛屿主体',
+        0.08,
+      ),
       ...this.reefs.map((reef, index) => this.circleCollider(
         reef.position.x,
         reef.position.z,
@@ -88,7 +93,6 @@ export class SeaMap {
   checkCollision(position: THREE.Vector3, shipRadius = 1.7): MapCollision | null {
     for (const collider of this.colliders) {
       if (collider.shape === 'circle') {
-        if (collider.dockingCutout && this.isInsideDockingChannel(position)) continue
         const dx = position.x - collider.center.x
         const dz = position.z - collider.center.y
         const distance = Math.hypot(dx, dz)
@@ -171,19 +175,19 @@ export class SeaMap {
     const sand = new THREE.MeshStandardMaterial({ color: '#b7a77b', roughness: 0.96 })
     const rock = new THREE.MeshStandardMaterial({ color: '#37433d', roughness: 0.98 })
     const beach = new THREE.Mesh(new THREE.CylinderGeometry(18, 24, 2.2, 22), sand)
-    beach.position.copy(this.islandGoal).add(new THREE.Vector3(0, -0.8, -4))
+    beach.position.copy(this.islandCenter).setY(-0.8)
     world.add(beach)
     const hill = new THREE.Mesh(new THREE.ConeGeometry(15, 15, 18), rock)
-    hill.position.copy(this.islandGoal).add(new THREE.Vector3(3, 6, -8))
+    hill.position.copy(this.islandCenter).add(new THREE.Vector3(3, 6, -4))
     world.add(hill)
     const lighthouse = new THREE.Mesh(
       new THREE.CylinderGeometry(1.4, 2.2, 12, 12),
       new THREE.MeshStandardMaterial({ color: '#d9ddd8', roughness: 0.65 }),
     )
-    lighthouse.position.copy(this.islandGoal).add(new THREE.Vector3(-5, 5.6, 0))
+    lighthouse.position.copy(this.islandCenter).add(new THREE.Vector3(-5, 5.6, 4))
     world.add(lighthouse)
     const beacon = new THREE.PointLight('#77e8ff', 28, 55, 1.7)
-    beacon.position.copy(this.islandGoal).add(new THREE.Vector3(-5, 12.2, 0))
+    beacon.position.copy(this.islandCenter).add(new THREE.Vector3(-5, 12.2, 4))
     world.add(beacon)
     const goal = new THREE.Mesh(
       new THREE.TorusGeometry(7, 0.22, 10, 48),
@@ -247,19 +251,14 @@ export class SeaMap {
     return positions
   }
 
-  private isInsideDockingChannel(position: THREE.Vector3): boolean {
-    return Math.abs(position.x) < 7.5 && position.z > -153
-  }
-
   private circleCollider(
     x: number,
     z: number,
     radius: number,
     label: string,
     restitution: number,
-    dockingCutout = false,
   ): CircleCollider {
-    return { shape: 'circle', center: new THREE.Vector2(x, z), radius, label, restitution, dockingCutout }
+    return { shape: 'circle', center: new THREE.Vector2(x, z), radius, label, restitution }
   }
 
   private boxCollider(
